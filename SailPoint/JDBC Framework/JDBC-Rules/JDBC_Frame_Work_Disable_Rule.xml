@@ -1,0 +1,63 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<!DOCTYPE Rule PUBLIC "sailpoint.dtd" "sailpoint.dtd">
+<Rule language="beanshell" name="JDBC_Frame_Work_Disable_Rule" type="JDBCOperationProvisioning">
+  <Description>This rule is used by the JDBC connector to do provisioning of the data .</Description>
+  <Signature returnType="ProvisioningResult"/>
+  <Source>import java.sql.PreparedStatement;
+import java.sql.SQLException;
+
+import sailpoint.object.ProvisioningResult;
+import sailpoint.object.Custom;
+
+import org.apache.log4j.Logger;
+
+Logger logger = Logger.getLogger("com.example.mycustomlogger");
+
+logger.info("====================== Disable Rule =========================");
+
+// Initialize result object
+ProvisioningResult result = new ProvisioningResult();
+
+// Check if the provisioning plan is null
+if(plan == null) {
+    String error = "Provisioning Plan is null";
+    logger.error(error);
+    result.setStatus( ProvisioningResult.STATUS_FAILED );
+    result.addError(error);
+    return result;
+}
+
+// Retrieve Custom object for JDBC
+Custom jdbcCustomObj = context.getObject( Custom.class, "JDBC Custom Object" );
+
+// Get enable query from Custom Object
+String disableQuery = jdbcCustomObj.get( "jdbc-frame-work-disableQuery" );
+
+// Null check for query
+if( disableQuery == null ) {
+    String error = "Account Disable query is null";
+    logger.error(error);
+    result.setStatus( ProvisioningResult.STATUS_FAILED );
+    result.addError( error );
+    return result;
+}
+
+try {
+
+    PreparedStatement statement = connection.prepareStatement( disableQuery );
+    statement.setString (1, (String) plan.getNativeIdentity() );
+    statement.executeUpdate();
+    statement.close();
+    
+    // Log successful execution of the Disable query
+    logger.info("Executed disable query for user: { " + plan.getNativeIdentity() + " }");
+    result.setStatus( ProvisioningResult.STATUS_COMMITTED );
+}
+catch( SQLException e ) {
+    logger.error(e);
+    result.setStatus( ProvisioningResult.STATUS_FAILED );
+    result.addError( e );
+}
+logger.debug( "Result { " + result.toXml()+ " }");
+return result;</Source>
+</Rule>

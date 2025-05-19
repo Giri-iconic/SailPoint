@@ -1,0 +1,95 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<!DOCTYPE Rule PUBLIC "sailpoint.dtd" "sailpoint.dtd">
+<Rule language="beanshell" name="JDBC_Test_Rule" type="JDBCOperationProvisioning">
+  <Description>This rule is used by the JDBC connector to do provisioning of the data .</Description>
+  <Signature returnType="ProvisioningResult"/>
+  <Source>
+import java.sql.PreparedStatement;
+import java.sql.SQLException;
+import sailpoint.object.ProvisioningPlan;
+import sailpoint.object.ProvisioningResult;
+import org.apache.commons.logging.LogFactory;
+import org.apache.commons.logging.Log;
+
+
+
+Logger logger = LogManager.getLogger("com.example.mycustomlogger");
+logger.debug("This is a debug message from my custom logger.");
+logger.info("This is an informational message.");
+
+log.warn("====================== Create Rule =========================");
+
+AccountRequest acctRequest = (AccountRequest) request;
+ProvisioningResult result = new ProvisioningResult();
+
+if(plan == null) {
+    log.error("Provisioning Plan is null");
+    result.setStatus( ProvisioningResult.STATUS_FAILED )
+    result.addError("Provisioning Plan is null");
+    return result;
+}
+
+String first_name = acctRequest.getAttributeRequest("first_name").getValue();
+String last_name = acctRequest.getAttributeRequest("last_name").getValue();
+String full_name = acctRequest.getAttributeRequest("full_name").getValue();
+String department = acctRequest.getAttributeRequest("department").getValue();
+String location = acctRequest.getAttributeRequest("location").getValue();
+
+// Null Checks
+StringBuilder sb = new StringBuilder();
+boolean hasNull = false;
+sb.append("Error: Provisioning Plan has following null value(s) :- ");
+
+if(full_name == null) {
+    sb.append(" 'Full Name'");
+    hasNull= true;
+}
+if(last_name == null) {
+    sb.append(" 'Last Name'");
+    hasNull= true;
+}
+if(full_name == null) {
+    sb.append(" 'Full Name'");
+    hasNull= true;
+}
+if(department == null) {
+    sb.append(" 'Department'");
+    hasNull= true;
+}
+if (location == null) {
+    sb.append(" 'Location'");
+    hasNull= true;
+}
+
+if(hasNull){
+    String error = sb.toString();
+    log.error(error);
+    result.setStatus( ProvisioningResult.STATUS_FAILED );
+    result.addError(error);
+    return result;
+}
+
+
+try {
+
+    String insertQuery = "INSERT INTO employee (emp_id,first_name,last_name,full_name,department,location) values (?,?,?,?,?,?)";
+    PreparedStatement statement = connection.prepareStatement(insertQuery);
+    statement.setString (1, plan.getNativeIdentity());
+    statement.setString (2, first_name);
+    statement.setString (3, last_name);
+    statement.setString (4, full_name);
+    statement.setString (5, department);
+    statement.setString (6, location);
+    statement.executeUpdate();
+
+    result.setStatus( ProvisioningResult.STATUS_COMMITTED );
+}
+catch( SQLException e ) {
+    log.error("Entering catch block");
+    log.error( e );
+    result.setStatus( ProvisioningResult.STATUS_FAILED );
+    result.addError( e );
+}
+    log.debug( "result [" + result.toXml(false)+ "]");
+return result;</Source>
+</Rule>

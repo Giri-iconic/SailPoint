@@ -1,0 +1,543 @@
+<?xml version='1.0' encoding='UTF-8'?>
+<!DOCTYPE Rule PUBLIC "sailpoint.dtd" "sailpoint.dtd">
+<Rule language="beanshell" name="JDBC_Framework_Rule_Library">
+  <Source>
+
+  import sailpoint.object.Application;
+  import sailpoint.object.ProvisioningPlan;
+  import sailpoint.object.ProvisioningPlan.AccountRequest;
+  import sailpoint.object.ProvisioningPlan.AttributeRequest;
+  import sailpoint.object.ProvisioningPlan.PermissionRequest;
+  import sailpoint.object.ProvisioningResult;
+  import sailpoint.object.Schema;
+  import sailpoint.tools.xml.XMLObjectFactory;
+  import org.apache.log4j.Logger;
+  import sailpoint.object.*;
+  import java.util.*;
+  import java.sql.*;
+
+
+
+  Logger logger = Logger.getLogger("com.example.mycustomlogger");
+
+  // Helper method to get attribute request value
+  public static Object getAttributeRequestValue(AccountRequest acctReq, String attribute) {
+    if (acctReq != null) {
+      AttributeRequest attrReq = acctReq.getAttributeRequest(attribute);
+      if (attrReq != null) {
+        return attrReq.getValue();
+      }
+    }
+    return null;
+  }
+
+  // Return ProvisioningResult and logs with error message
+  private static ProvisioningResult nullCheckHandler(String errorMessage, ProvisioningResult result,
+                                                     Connection connection) {
+    try {
+      logger.error(errorMessage);
+      result.setStatus(ProvisioningResult.STATUS_FAILED);
+      result.addError(errorMessage);
+      connection.rollback();
+      return result;
+    } catch (SQLException e1) {
+
+      logger.error(e1);
+      result.setStatus(ProvisioningResult.STATUS_FAILED);
+      result.addError(e1);
+      return result;
+    }
+  }
+
+  // Execute quires with Prepared Statement
+  public static void executeQuery(String query, List paramNames, AccountRequest acctRequest) {
+
+    PreparedStatement statement = connection.prepareStatement(query);
+
+    for (int i = 0; i &lt; paramNames.size(); i++) {
+      String paramName = paramNames.get(i);
+
+      if(paramName.equals("nativeIdentity")){
+        statement.setObject(i +1, plan.getNativeIdentity());
+      }else {
+        statement.setObject(i + 1, getAttributeRequestValue(acctRequest, paramName));
+      }
+
+    }
+    statement.executeUpdate();
+    logger.info("Executed query for user: { " + plan.getNativeIdentity() + " }");
+  }
+
+  // Execute quires with Prepared Statement for entitlements add / remove
+  public static void executeQueryEntitlement(String query, List paramNames, AccountRequest acctRequest, AttributeRequest attRequest) {
+
+    PreparedStatement statement = connection.prepareStatement(query);
+
+    for (int i = 0; i &lt; paramNames.size(); i++) {
+      String paramName = paramNames.get(i);
+
+      if(paramName.equals("nativeIdentity")){
+        statement.setObject(i +1, plan.getNativeIdentity());
+      }else if(paramName.equals("value")){
+        statement.setObject(i + 1, attRequest.getValue());
+      } else {
+        statement.setObject(i + 1, getAttributeRequestValue(acctRequest, paramName));
+      }
+
+    }
+    statement.executeUpdate();
+    logger.info("Executed query for user: { " + plan.getNativeIdentity() + " }");
+  }
+
+  // Execute quires with Callable Statement
+  public static void executePreparedStatement(String query, List paramNames, AccountRequest acctRequest) {
+
+    CallableStatement statement = connection.prepareCall(query);
+    for (int i = 0; i &lt; paramNames.size(); i++) {
+      String paramName = paramNames.get(i);
+      if(paramName.equals("nativeIdentity")){
+        statement.setObject(i +1, plan.getNativeIdentity());
+      }else {
+        statement.setObject(i + 1, getAttributeRequestValue(acctRequest, paramName));
+      }
+    }
+    statement.execute();
+    logger.info("Executed stored procedure for user: { " + plan.getNativeIdentity() + " }");
+  }
+
+  // Execute quires with Callable Statement for entitlements add / remove
+  public static void executePreparedStatementEntitlement(String query, List paramNames, AccountRequest acctRequest, AttributeRequest attRequest) {
+
+    CallableStatement statement = connection.prepareCall(query);
+    for (int i = 0; i &lt; paramNames.size(); i++) {
+      String paramName = paramNames.get(i);
+      if(paramName.equals("nativeIdentity")){
+        statement.setObject(i +1, plan.getNativeIdentity());
+      }else if(paramName.equals("value")){
+        statement.setObject(i + 1, attRequest.getValue());
+      } else {
+        statement.setObject(i + 1, getAttributeRequestValue(acctRequest, paramName));
+      }
+    }
+    statement.execute();
+    logger.info("Executed stored procedure for user: { " + plan.getNativeIdentity() + " }");
+  }
+
+  // Handle all AccountRequest and AttributeRequest Operations
+  public static ProvisioningResult provision(ProvisioningPlan plan, String custObj){
+
+    try {
+      connection.setAutoCommit(false);
+    } catch (SQLException e) {
+      e.printStackTrace();
+    }
+
+    // Initialize ProvisioningResult and Custom object
+    Custom jdbcCustomObj = context.getObject( Custom.class, custObj );
+    ProvisioningResult result = new ProvisioningResult();
+
+    // Check if the provisioning plan is null
+    if (plan == null) {
+      return nullCheckHandler("ProvisioningPlan is null", result);
+    }
+
+
+    logger.debug( "plan [" + plan.toXml() + "]" );
+
+    // Retrieve account requests
+    List accounts = plan.getAccountRequests();
+
+    if ( ( accounts != null ) &amp;&amp; ( accounts.size() &gt; 0 ) ) {
+      for ( AccountRequest account : accounts ) {
+
+        try {
+          if ( AccountRequest.Operation.Create.equals( account.getOperation() ) ) {
+
+            logger.info("====================== Create Operation =========================");
+
+            List queryList = jdbcCustomObj.get("insert");
+            Map entitlementAddQueriesMap = jdbcCustomObj.get("addEntitlement");
+
+            if (queryList == null) {
+              String error = "Insert Query / Stored Procedure List is null";
+              return nullCheckHandler(error, result);
+            }
+
+            // Traverse through Query List and access the Map object for essential data      
+            for (Map queryData : queryList) {
+              String query = (String) queryData.get("query");
+              boolean isPreparedStatement = Boolean.parseBoolean((String) queryData.get("isPreparedStatement"));
+              List paramNames = (List) queryData.get("parameters");
+
+              if (query == null) {
+                String error = "Insert Query / Procedure is null";
+                return nullCheckHandler(error, result);
+              }
+
+              // Call appropriate method with respect to type of query
+              if (isPreparedStatement) {
+                executePreparedStatement(query, paramNames, account);
+              } else {
+                executeQuery(query, paramNames, account);
+              }
+            }
+
+            // Fetch AttributeRequest requests
+            List attributeRequests = account.getAttributeRequests();
+
+            for (AttributeRequest attributeRequest : attributeRequests) {
+              String attributeName = attributeRequest.getName();
+              String attributeValue = attributeRequest.getValue();
+
+              logger.info("====================== Create Operation Add Entitlement =========================");
+              if (entitlementAddQueriesMap == null) {
+                String error = "Entitlement Add Query / Stored Procedure Map is null";
+                return nullCheckHandler(error, result);
+              }
+
+              if(ProvisioningPlan.Operation.Add.equals(attributeRequest.getOperation())){
+                List queryList = entitlementAddQueriesMap.get(attributeName);
+
+                // Iterate on entilement add Queries
+                for (Map queryData : queryList) {
+                  String query = (String) queryData.get("query");
+                  boolean isPreparedStatement = Boolean.parseBoolean((String) queryData.get("isPreparedStatement"));
+                  List paramNames = (List) queryData.get("parameters");
+
+                  if (query == null) {
+                    String error = "Entitlement Add Query / Stored Procedure is null for "
+                      + attributeName;
+                    logger.warn(error);
+                    continue;
+                  }
+
+                  if (isPreparedStatement) {
+                    executePreparedStatementEntitlement(query, paramNames, account, attributeRequest);
+                    logger.info(paramNames);
+                  } else {
+                    executeQueryEntitlement(query, paramNames, account, attributeRequest);
+                    logger.info(paramNames);
+                  }
+                }
+              }
+            }
+
+            connection.commit();
+            result.setStatus( ProvisioningResult.STATUS_COMMITTED );
+          } else if ( AccountRequest.Operation.Modify.equals( account.getOperation() ) ) {
+
+            logger.info("====================== Modify Operation =========================");
+
+            Map entitlementAddQueriesMap = jdbcCustomObj.get("addEntitlement");
+            Map entitlementRemoveQueriesMap = jdbcCustomObj.get("removeEntitlement");
+            Map attributeUpdateQuery = jdbcCustomObj.get("attributeUpdate");
+
+            if (entitlementAddQueriesMap == null) {
+              String error = "Entitlement Add Query / Stored Procedure Map is null";
+              return nullCheckHandler(error, result);
+            }
+
+            List attributeRequests = account.getAttributeRequests();
+
+            for (AttributeRequest attributeRequest : attributeRequests) {
+              String attributeName = attributeRequest.getName();
+              String attributeValue = attributeRequest.getValue();
+
+              if(ProvisioningPlan.Operation.Add.equals(attributeRequest.getOperation())){
+
+                logger.info("====================== Add Entitlement =========================");
+
+                List queryList = entitlementAddQueriesMap.get(attributeName);
+
+                for (Map queryData : queryList) {
+                  String query = (String) queryData.get("query");
+                  boolean isPreparedStatement = Boolean.parseBoolean((String) queryData.get("isPreparedStatement"));
+                  List paramNames = (List) queryData.get("parameters");
+
+                  if (query == null) {
+                    String error = "Entitlement Add Query / Stored Procedure is null for "
+                      + attributeName;
+                    logger.warn(error);
+                    continue;
+                  }
+
+                  if (isPreparedStatement) {
+                    executePreparedStatementEntitlement(query, paramNames, account, attributeRequest);
+                  } else {
+                    executeQueryEntitlement(query, paramNames, account, attributeRequest);
+                  }
+                }
+              }
+
+              // Remove entitlement
+              if(ProvisioningPlan.Operation.Remove.equals(attributeRequest.getOperation())){
+
+                logger.info("====================== Remove Entitlement =========================");
+
+                List queryList = entitlementRemoveQueriesMap.get(attributeName);
+
+                for (Map queryData : queryList) {
+                  String query = (String) queryData.get("query");
+                  boolean isPreparedStatement = Boolean.parseBoolean((String) queryData.get("isPreparedStatement"));
+                  List paramNames = (List) queryData.get("parameters");
+
+                  if (query == null) {
+                    String error = "Entitlement Remove Query / Stored Procedure is null for "
+                      + attributeName;
+                    logger.warn(error);
+                    continue;
+                  }
+
+                  if (isPreparedStatement) {
+                    executePreparedStatementEntitlement(query, paramNames, account, attributeRequest);
+                  } else {
+                    executeQueryEntitlement(query, paramNames, account, attributeRequest);
+                  }
+                }
+              }
+
+              // Update Account attribute
+              if (ProvisioningPlan.Operation.Set.equals(attributeRequest.getOperation())) {
+
+                logger.info("====================== Update Operation =========================");
+
+                List queryList = attributeUpdateQuery.get(attributeName);
+
+                for (Map queryData : queryList) {
+                  String query = (String) queryData.get("query");
+                  boolean isPreparedStatement = Boolean
+                    .parseBoolean((String) queryData.get("isPreparedStatement"));
+                  List paramNames = queryData.get("parameters");
+
+                  if (query == null) {
+                    String error = "Update Query / Stored Procedure is null for " + attributeName;
+                    return nullCheckHandler(error, result);
+                  }
+
+                  if (isPreparedStatement) {
+                    executePreparedStatement(query, paramNames, account);
+                  } else {
+                    executeQuery(query, paramNames, account);
+                  }
+                }
+
+              }
+            }
+            connection.commit();
+            result.setStatus( ProvisioningResult.STATUS_COMMITTED );
+
+          }	else if ( AccountRequest.Operation.Disable.equals( account.getOperation() ) ) {
+
+            logger.info("====================== Disable Operation =========================");
+
+            List queryList = jdbcCustomObj.get("disable");
+
+            if (queryList == null) {
+              String error = "Account Disable Query / Stored Procedure List is null";
+              return nullCheckHandler(error, result);
+            }
+
+            for (Map queryData : queryList) {
+              String query = (String) queryData.get("query");
+              boolean isPreparedStatement = Boolean.parseBoolean((String) queryData.get("isPreparedStatement"));
+              List paramNames = (List) queryData.get("parameters");
+
+              if (query == null) {
+                String error = "Account Disable Query / Stored Procedure is null";
+                return nullCheckHandler(error, result);
+              }
+
+              if (isPreparedStatement) {
+                executePreparedStatement(query, paramNames, account);
+              } else {
+                executeQuery(query, paramNames, account);
+              }
+            }
+            connection.commit();
+            result.setStatus( ProvisioningResult.STATUS_COMMITTED );
+
+          } else if ( AccountRequest.Operation.Enable.equals( account.getOperation() ) ) {
+
+            logger.info("====================== Enable Operation =========================");
+
+            List queryList = jdbcCustomObj.get("enable");
+
+            if (queryList == null) {
+              String error = "Account Enable Query / Stored Procedure is null";
+              return nullCheckHandler(error, result);
+            }
+
+            for (Map queryData : queryList) {
+              String query = (String) queryData.get("query");
+              boolean isPreparedStatement = Boolean.parseBoolean((String) queryData.get("isPreparedStatement"));
+              List paramNames = (List) queryData.get("parameters");
+
+              if (query == null) {
+                String error = "Account Enable Query / Stored Procedure is null";
+                return nullCheckHandler(error, result);
+              }
+
+              if (isPreparedStatement) {
+                executePreparedStatement(query, paramNames, account);
+              } else {
+                executeQuery(query, paramNames, account);
+              }
+            }
+            connection.commit();
+            result.setStatus( ProvisioningResult.STATUS_COMMITTED );
+
+          } else if ( AccountRequest.Operation.Delete.equals( account.getOperation() ) ) {
+
+            logger.info("====================== Delete Operation =========================");
+
+            Map entitlementDeleteQueriesMap = jdbcCustomObj.get("removeAllEntitlements");
+            List deleteQueryList = jdbcCustomObj.get("delete");
+
+            if (deleteQueryList == null) {
+              String error = "Account Delete Query / Stored Procedure Map is null";
+              return nullCheckHandler(error, result);
+            }
+
+            if (entitlementDeleteQueriesMap == null) {
+              String error = "Entitlement Remove Query / Stored Procedure List is null";
+              return nullCheckHandler(error, result);
+            }
+
+            Application application = context.getObjectByName(Application.class, plan.getTargetIntegration());
+
+            Filter identityFilter = Filter.eq("identity.name", plan.getNativeIdentity());
+            Filter applicationFilter = Filter.eq("application", application);
+            Filter collectiveFilter = Filter.and(identityFilter, applicationFilter);
+
+            QueryOptions qo = new QueryOptions();
+            qo.addFilter(collectiveFilter);
+
+            List entitlementsList = context.getObjects(IdentityEntitlement.class, qo);
+            Set processedAttr = new HashSet();
+
+            // Delete all Entitlements
+            for(IdentityEntitlement id : entitlementsList) {
+
+              logger.info("====================== Delete Operation : Remove Entitlement =========================");
+
+              String attName = id.getName();
+              if(!processedAttr.contains(attName)) {
+                processedAttr.add(attName);
+
+                List queryList = entitlementDeleteQueriesMap.get(attName);
+
+                if (queryList == null) {
+                  String error = "Entitlement Remove Query / Stored Procedure List is null";
+                  return nullCheckHandler(error, result);
+                }
+
+                for (Map queryData : queryList) {
+                  String query = (String) queryData.get("query");
+                  boolean isPreparedStatement = Boolean.parseBoolean((String) queryData.get("isPreparedStatement"));
+                  List paramNames = (List) queryData.get("parameters");
+
+                  if (query == null) {
+                    String error = "Entitlement Remove Query / Stored Procedure is null";
+                    return nullCheckHandler(error, result);
+                  }
+
+                  if (isPreparedStatement) {
+                    executePreparedStatement(query, paramNames, account);
+                  } else {
+                    executePreparedStatement(query, paramNames, account);
+                  }
+                }
+              }
+            }
+
+            for (Map queryData : deleteQueryList) {
+              String query = (String) queryData.get("query");
+              boolean isPreparedStatement = Boolean.parseBoolean((String) queryData.get("isPreparedStatement"));
+              List paramNames = (List) queryData.get("parameters");
+
+              if (query == null) {
+                String error = "Account Delete Query / Stored Procedure is null";
+                return nullCheckHandler(error, result);
+              }
+
+              if (isPreparedStatement) {
+                executePreparedStatement(query, paramNames, account);
+              } else {
+                executeQuery(query, paramNames, account);
+              }
+            }
+
+            application.setDisabled(true);
+          } else if ( AccountRequest.Operation.Unlock.equals( account.getOperation() ) ) {
+
+            logger.info("====================== Unlock Operation =========================");
+
+            List queryList = jdbcCustomObj.get( "unlock" );
+
+            if (queryList == null) {
+              String error = "Account Unlock Query / Stored Procedure List is null";
+              return nullCheckHandler(error, result);
+            }
+
+            for (Map queryData : queryList) {
+              String query = (String) queryData.get("query");
+              boolean isPreparedStatement = Boolean.parseBoolean((String) queryData.get("isPreparedStatement"));
+              List paramNames = (List) queryData.get("parameters");
+
+              if (query == null) {
+                String error = "Account Unlock Query / Stored Procedure is null";
+                return nullCheckHandler(error, result);
+              }
+
+              if (isPreparedStatement) {
+                executePreparedStatement(query, paramNames, account);
+              } else {
+                executeQuery(query, paramNames, account);
+              }
+            }
+          }
+          connection.commit();
+          result.setStatus( ProvisioningResult.STATUS_COMMITTED );
+
+        }catch( SQLException e ) {
+          logger.error( e );
+          result.setStatus( ProvisioningResult.STATUS_FAILED );
+          result.addError( e );
+          connection.rollback();
+          try {
+            logger.error(e);
+            result.setStatus(ProvisioningResult.STATUS_FAILED);
+            result.addError(e);
+            connection.rollback();
+          } catch (SQLException e1) {
+            logger.error(e1);
+            result.setStatus(ProvisioningResult.STATUS_FAILED);
+            result.addError(e1);
+          }
+        } catch (Exception e) {
+          try {
+            logger.error(e);
+            result.setStatus(ProvisioningResult.STATUS_FAILED);
+            result.addError(e);
+            connection.rollback();
+          } catch (SQLException e1) {
+
+            logger.error(e1);
+            result.setStatus(ProvisioningResult.STATUS_FAILED);
+            result.addError(e1);
+          }
+        } finally{
+          try {
+            connection.close();
+          } catch (SQLException e) {
+            e.printStackTrace();
+          }
+        }
+      }
+    }
+
+    logger.debug( "result [" + result.toXml(false)+ "]");
+    return result;
+  }
+  </Source>
+</Rule>
